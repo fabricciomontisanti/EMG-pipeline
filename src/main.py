@@ -3,6 +3,8 @@ from offline import read_cometa_ascii, get_sample, get_depth
 from core.processing import SignalProcessor 
 from visualizer import plot_multichannel_signal, ControlVisualizer
 from core.features import FeaturesExtractor
+from testing import show_window
+from testing import show_features
 
 
 from dataclasses import dataclass
@@ -30,11 +32,6 @@ class config:
     c5: str
     c6: str
 
-def show_window(window: np.ndarray, contador: int, output_file):
-
-    print(f"Ventana {contador}:", file=output_file)
-    print("Caracteristicas:", file=output_file)
-    print(window, file=output_file)
 
 def get_block(data_frame, start_index: int, block_size: int) -> np.ndarray:
     """
@@ -67,6 +64,9 @@ def main():
     max_samples: int = SAMPLING_RATE * BUFFER_DURATION_SECONDS
 
     conf: config = config(c1= "FD", c2= "FP", c3= "ED", c4= "EC", c5= "FC", c6= "P")
+
+    windows_file = open("results/windows.txt", "w")
+    features_file = open("results/features.txt", "w")
 
 
     # Lectura del fichero
@@ -112,57 +112,62 @@ def main():
     first: bool = True
     samples_since_last_window: int = 0
 
-    with open("output.txt", "w") as output_file:
-        for start_index in range(0, len(data_frame), ACQUISITION_BLOCK_SIZE):
-            #Obtener bloque crudo
-            raw_block: np.ndarray = get_block(data_frame, start_index, ACQUISITION_BLOCK_SIZE)
+    for start_index in range(0, len(data_frame), ACQUISITION_BLOCK_SIZE):
+        #Obtener bloque crudo
+        raw_block: np.ndarray = get_block(data_frame, start_index, ACQUISITION_BLOCK_SIZE)
 
-            if raw_block.shape[0] == 0:
-                continue
+        if raw_block.shape[0] == 0:
+            continue
 
-            if raw_block.shape[1] != N_CHANNELS:
-                raise ValueError(
-                    f"El bloque tiene {raw_block.shape[1]} canales, "
-                    f"pero se esperaban {N_CHANNELS}"
-                )
+        if raw_block.shape[1] != N_CHANNELS:
+            raise ValueError(
+                f"El bloque tiene {raw_block.shape[1]} canales, "
+                f"pero se esperaban {N_CHANNELS}"
+            )
 
-            #Procesar bloque
-            processed_block: np.ndarray = processor.process_block(raw_block)
+        #Procesar bloque
+        processed_block: np.ndarray = processor.process_block(raw_block)
 
-            #Visualizar
-            raw_signal.append(raw_block)
-            processed_signal.append(processed_block)
+        #Visualizar
+        raw_signal.append(raw_block)
+        processed_signal.append(processed_block)
 
-            #Insertar muestras procesadas en el buffer
-            for sample in processed_block:
-                buffer.add_sample(sample)
+        #Insertar muestras procesadas en el buffer
+        for sample in processed_block:
+            buffer.add_sample(sample)
 
-            # 4. Actualizar cuántas muestras nuevas han llegado
-            samples_since_last_window += processed_block.shape[0]
+        #Actualizar cuántas muestras nuevas han llegado
+        samples_since_last_window += processed_block.shape[0]
 
-            # 5. Extraer ventana cuando haya suficiente señal
-            if (first and len(buffer) >= WINDOW_SIZE) or (not first and samples_since_last_window >= HOP_SIZE):
-                if (first):
-                    signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
-                                            sampling_rate=SAMPLING_RATE, 
-                                            channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
-                    first = False
-                    samples_since_last_window = 0
-                    features = feature_extractor.extract(signal_data)
+        #Extraer ventana cuando haya suficiente señal
+        if (first and len(buffer) >= WINDOW_SIZE) or (not first and samples_since_last_window >= HOP_SIZE):
+            if (first):
+                signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
+                                        sampling_rate=SAMPLING_RATE, 
+                                        channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
+                first = False
+                samples_since_last_window = 0
+                features = feature_extractor.extract(signal_data)
 
-                elif (samples_since_last_window >= HOP_SIZE):
-                    signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
-                                            sampling_rate=SAMPLING_RATE, 
-                                            channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
-                    samples_since_last_window = 0
-                    features = feature_extractor.extract(signal_data)
+            elif (samples_since_last_window >= HOP_SIZE):
+                signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
+                                        sampling_rate=SAMPLING_RATE, 
+                                        channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
+                samples_since_last_window = 0
+                features = feature_extractor.extract(signal_data)
 
-                #Mostrar ventana procesada
-                #show_window(signal_data.get_samples(), window_c, output_file)
-                window_c += 1
+            #Mostrar ventana procesada
+            show_window(signal_data.get_samples(), window_c, windows_file)
+                
 
-                #Mostrar características extraídas
-                show_window(features, window_c, output_file)
+            #Mostrar características extraídas
+            show_features(features, window_c, features_file)
+
+            window_c += 1
+
+
+    windows_file.close()
+    features_file.close()
                 
             
 

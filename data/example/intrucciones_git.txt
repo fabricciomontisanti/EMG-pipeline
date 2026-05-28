@@ -1,0 +1,4 @@
+git status
+git add src/main.py README.md
+git commit -m "Add EMG feature extraction documentation"
+git push

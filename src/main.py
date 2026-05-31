@@ -5,6 +5,7 @@ from visualizer import plot_multichannel_signal, ControlVisualizer
 from core.features import FeaturesExtractor
 from testing import show_window
 from testing import show_features
+from core.classification import LDAClassifier
 
 
 from dataclasses import dataclass
@@ -62,6 +63,8 @@ def main():
     file_name: str = input("Introduce el nombre del fichero a cargar: ")
     file_path: str = "data/raw/" + file_name
     max_samples: int = SAMPLING_RATE * BUFFER_DURATION_SECONDS
+    mode: str = input ("Introduce el modo ('entrenamiento' o 'prediccion'): ")
+
 
     conf: config = config(c1= "FD", c2= "FP", c3= "ED", c4= "EC", c5= "FC", c6= "P")
 
@@ -106,10 +109,20 @@ def main():
         ssc_threshold=5.0  # Umbral para cambios de pendiente
     )
 
+    # Creación del clasificador LDA
+    lda: LDAClassifier = LDAClassifier()
+    if mode == "entrenamiento":
+        try:
+            lda.load_training_memory("models/training_memory.joblib")
+            print("Memoria de entrenamiento cargada.")
+        except FileNotFoundError:
+            print("No hay memoria previa. Se empieza desde cero.")
+
+    if mode == "prediccion":
+        lda.load_model("models/lda_model.joblib")
 
     # Recorrido muestra a muestra
     window_c: int = 0
-    first: bool = True
     samples_since_last_window: int = 0
 
     for start_index in range(0, len(data_frame), ACQUISITION_BLOCK_SIZE):
@@ -140,21 +153,19 @@ def main():
         samples_since_last_window += processed_block.shape[0]
 
         #Extraer ventana cuando haya suficiente señal
-        if (first and len(buffer) >= WINDOW_SIZE) or (not first and samples_since_last_window >= HOP_SIZE):
-            if (first):
-                signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
-                                        sampling_rate=SAMPLING_RATE, 
-                                        channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
-                first = False
-                samples_since_last_window = 0
-                features = feature_extractor.extract(signal_data)
+        if len(buffer) >= WINDOW_SIZE and samples_since_last_window >= HOP_SIZE:
+            signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
+                                    sampling_rate=SAMPLING_RATE, 
+                                    channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
+            
+            samples_since_last_window = 0
+            features = feature_extractor.extract(signal_data)
+            if (mode == "entrenamiento"):
+                lda.add_training_sample(features, label="etiqueta") 
+            elif (mode == 'prediccion'):
+                predicted_label = lda.predict(features)
+                print(f"Predicción para ventana {window_c}: {predicted_label}")
 
-            elif (samples_since_last_window >= HOP_SIZE):
-                signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
-                                        sampling_rate=SAMPLING_RATE, 
-                                        channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
-                samples_since_last_window = 0
-                features = feature_extractor.extract(signal_data)
 
             #Mostrar ventana procesada
             show_window(signal_data.get_samples(), window_c, windows_file)
@@ -169,7 +180,12 @@ def main():
     windows_file.close()
     features_file.close()
                 
-            
+    #Entrenar modelo 
+    if (mode == "entrenamiento"):
+        lda.train_from_memory()
+
+        lda.save_training_memory("models/training_memory.joblib")
+        lda.save_model("models/lda_model.joblib")
 
     #Visualizar señal completa
     visualizer = ControlVisualizer(

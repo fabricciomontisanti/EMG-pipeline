@@ -1,11 +1,11 @@
 from core import CircularBuffer, SignalData
-from offline import read_cometa_ascii, get_sample, get_depth
 from core.processing import SignalProcessor 
-from visualizer import plot_multichannel_signal, ControlVisualizer
+from core.classification.lda_classifier import LDAClassifier
 from core.features import FeaturesExtractor
-from testing import show_window
-from testing import show_features
-from core.classification import LDAClassifier
+from offline import read_cometa_ascii, get_sample, get_depth, read_label_ranges_txt, get_label_for_window_realtime_fixed
+from visualizer import plot_multichannel_signal, ControlVisualizer
+from testing import show_window, show_features
+
 
 
 from dataclasses import dataclass
@@ -61,7 +61,7 @@ def main():
 
     # Configuración
     file_name: str = input("Introduce el nombre del fichero a cargar: ")
-    file_path: str = "data/raw/" + file_name
+    file_path: str = "data/raw/" + file_name + ".txt"
     max_samples: int = SAMPLING_RATE * BUFFER_DURATION_SECONDS
     mode: str = input ("Introduce el modo ('entrenamiento' o 'prediccion'): ")
 
@@ -108,6 +108,9 @@ def main():
         zc_threshold=5.0,  # Umbral para cruces por cero
         ssc_threshold=5.0  # Umbral para cambios de pendiente
     )
+
+    # Lectura de etiquetas
+    label_ranges = read_label_ranges_txt("data/labels/" + file_name + "_labels.txt")
 
     # Creación del clasificador LDA
     lda: LDAClassifier = LDAClassifier()
@@ -160,12 +163,21 @@ def main():
             
             samples_since_last_window = 0
             features = feature_extractor.extract(signal_data)
-            if (mode == "entrenamiento"):
-                lda.add_training_sample(features, label="etiqueta") 
-            elif (mode == 'prediccion'):
+            label = get_label_for_window_realtime_fixed(
+                window_index=window_c,
+                label_ranges=label_ranges,
+                window_size_first=WINDOW_SIZE / SAMPLING_RATE,
+                window_size_hop=HOP_SIZE / SAMPLING_RATE,
+                hop_size=HOP_SIZE / SAMPLING_RATE
+            )
+            
+            if mode == "entrenamiento":
+                if label != "ignore":
+                    lda.add_training_sample(features, label=label)
+            elif mode == "prediccion":
                 predicted_label = lda.predict(features)
-                print(f"Predicción para ventana {window_c}: {predicted_label}")
-
+                print(f"Ventana {window_c}: etiqueta real={label}, predicha={predicted_label}")
+            
 
             #Mostrar ventana procesada
             show_window(signal_data.get_samples(), window_c, windows_file)
@@ -179,13 +191,20 @@ def main():
 
     windows_file.close()
     features_file.close()
-                
+
+    
     #Entrenar modelo 
     if (mode == "entrenamiento"):
         lda.train_from_memory()
 
         lda.save_training_memory("models/training_memory.joblib")
         lda.save_model("models/lda_model.joblib")
+    
+    """
+    #Visualizador de etiquetas
+    for i in range(len(window_labels)):
+        print(f"Ventana {i}: etiqueta={window_labels[i]}")
+    """
 
     #Visualizar señal completa
     visualizer = ControlVisualizer(

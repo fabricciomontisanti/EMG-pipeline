@@ -26,7 +26,7 @@ class LDAClassifier:
         self.prediction_true_labels: list[str] = []
         self.prediction_outputs: list[str] = []
 
-   def add_training_sample(self, features: np.ndarray, label: str):
+    def add_training_sample(self, features: np.ndarray, label: str):
         """
         Añade una ventana etiquetada a la memoria de entrenamiento.
         """

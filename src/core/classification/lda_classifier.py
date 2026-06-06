@@ -204,3 +204,16 @@ class LDAClassifier:
             raise ValueError(
                 "LDA necesita al menos dos clases distintas para entrenar."
             )
+
+    def clear_training_memory(self):
+        """
+        Limpia las muestras de entrenamiento acumuladas.
+        """
+
+        memory_file = "models/training_memory.joblib"
+        model_file = "models/lda_model.joblib"
+
+        if os.path.exists(memory_file):
+            os.remove(memory_file)
+        if os.path.exists(model_file):
+            os.remove(model_file)

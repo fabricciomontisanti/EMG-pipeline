@@ -1,3 +1,4 @@
+#Librerias
 from core import CircularBuffer, SignalData
 from core.processing import SignalProcessor 
 from core.classification.lda_classifier import LDAClassifier
@@ -6,15 +7,12 @@ from offline import read_cometa_ascii, get_sample, get_depth, read_label_ranges_
 from visualizer import plot_multichannel_signal, ControlVisualizer
 from testing import show_window, show_features
 
-
-
 from dataclasses import dataclass
-
 import numpy as np
 np.set_printoptions(threshold=np.inf)
 
 
-
+#METADATOS
 SAMPLING_RATE: int = 2000
 N_CHANNELS: int = 6
 
@@ -33,7 +31,7 @@ class config:
     c5: str
     c6: str
 
-
+#Funciones auxiliares
 def get_block(data_frame, start_index: int, block_size: int) -> np.ndarray:
     """
     Devuelve un bloque de muestras EMG a partir del DataFrame.
@@ -54,6 +52,7 @@ def get_block(data_frame, start_index: int, block_size: int) -> np.ndarray:
 
     return np.array(block_samples, dtype=float)
 
+#main
 def main():
     """
     Programa principal
@@ -64,9 +63,12 @@ def main():
     file_path: str = "data/raw/" + file_name + ".txt"
     max_samples: int = SAMPLING_RATE * BUFFER_DURATION_SECONDS
     mode: str = input ("Introduce el modo ('entrenamiento' o 'prediccion'): ")
+    clear: str = input("¿Limpiar memoria? (s/n): ")
 
+    
 
-    conf: config = config(c1= "FD", c2= "FP", c3= "ED", c4= "EC", c5= "FC", c6= "P")
+    conf: config = config(c1= "P", c2= "FC", c3= "FD", c4= "FP", c5= "ED", c6= "EC")
+    muscle_order= ["FD", "FP", "ED", "EC", "FC", "P"]
 
     windows_file = open("results/windows.txt", "w")
     features_file = open("results/features.txt", "w")
@@ -105,7 +107,7 @@ def main():
 
     # Creación del extractor de características
     feature_extractor: FeaturesExtractor = FeaturesExtractor(
-        zc_threshold=5.0,  # Umbral para cruces por cero
+        zc_threshold=5.0,  # Umbral para cruces por cero 
         ssc_threshold=5.0  # Umbral para cambios de pendiente
     )
 
@@ -114,6 +116,10 @@ def main():
 
     # Creación del clasificador LDA
     lda: LDAClassifier = LDAClassifier()
+    if clear.lower() == 's':
+        lda.clear_training_memory()
+        print("Memoria de entrenamiento limpiada.")
+        return 0; 
     if mode == "entrenamiento":
         try:
             lda.load_training_memory("models/training_memory.joblib")
@@ -157,12 +163,25 @@ def main():
 
         #Extraer ventana cuando haya suficiente señal
         if len(buffer) >= WINDOW_SIZE and samples_since_last_window >= HOP_SIZE:
+            #Extraer ventana ordenada por grupos musculares
             signal_data = SignalData(samples=buffer.get_last_samples(WINDOW_SIZE), 
                                     sampling_rate=SAMPLING_RATE, 
                                     channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6])
+            window_samples = signal_data.get_samples() #Obtener muestras de la ventana sin ordenar
+            channel_names = signal_data.get_channel_names() #Obtener nombres de los canales para ordenar la ventana
+
+            indices= [channel_names.index(muscle) for muscle in muscle_order] #Obtener índices de los canales en el orden deseado
+
+            window_samples_ordered = window_samples[:, indices] #Reordenar las muestras de la ventana según el orden deseado de grupos musculares
             
-            samples_since_last_window = 0
-            features = feature_extractor.extract(signal_data)
+            samples_since_last_window = 0 
+
+            #Extraer características
+            features = feature_extractor.extract(SignalData(samples=window_samples_ordered,
+                                                            sampling_rate=SAMPLING_RATE,
+                                                            channel_names=muscle_order))
+
+            #Obtener etiqueta de la ventana
             label = get_label_for_window_realtime_fixed(
                 window_index=window_c,
                 label_ranges=label_ranges,
@@ -171,6 +190,7 @@ def main():
                 hop_size=HOP_SIZE / SAMPLING_RATE
             )
             
+            #Entrenar o predecir con LDA según el modo
             if mode == "entrenamiento":
                 if label != "ignore":
                     lda.add_training_sample(features, label=label)

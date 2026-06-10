@@ -72,6 +72,7 @@ def main():
 
     windows_file = open("results/windows.txt", "w")
     features_file = open("results/features.txt", "w")
+    labels_file = open("results/labels.txt", "w")
 
 
     # Lectura del fichero
@@ -196,7 +197,7 @@ def main():
                     lda.add_training_sample(features, label=label)
             elif mode == "prediccion":
                 predicted_label = lda.predict(features)
-                print(f"Ventana {window_c}: etiqueta real={label}, predicha={predicted_label}")
+                labels_file.write(f"Ventana {window_c}: etiqueta real={label}, predicha={predicted_label}\n")
             
 
             #Mostrar ventana procesada
@@ -211,6 +212,7 @@ def main():
 
     windows_file.close()
     features_file.close()
+    labels_file.close()
 
     
     #Entrenar modelo 

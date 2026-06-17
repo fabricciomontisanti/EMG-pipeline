@@ -19,6 +19,7 @@ class ControlVisualizer:
 
         self.visualize()
 
+
     def visualize(self):
         raw_signal= np.vstack(self.raw_signal)
         processed_signal = np.vstack(self.processed_signal)

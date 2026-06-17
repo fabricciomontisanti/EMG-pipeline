@@ -7,7 +7,13 @@ env/
 data/
 models/
 results/
+SDK/
 output.txt
+src/online/CometaBridge/lib/*.dll
+src/online/CometaBridge/lib/*.pdb
+src/online/CometaBridge/bin/
+src/online/CometaBridge/obj/
+src/online/CometaBridge/lib
 
 .vscode/
 .idea/

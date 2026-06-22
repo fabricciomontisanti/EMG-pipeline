@@ -5,12 +5,17 @@ from core.classification.lda_classifier import LDAClassifier
 from core.features import FeaturesExtractor
 from offline import read_cometa_ascii, get_sample, get_depth, read_label_ranges_txt, get_label_for_window_realtime_fixed
 from visualizer import plot_multichannel_signal, ControlVisualizer
+from online.training import TrainingOnline
+
 from testing import show_window, show_features, show_metrics
 from metrics import load_results, calculate_metrics
+from online import receive_blocks
 
 from dataclasses import dataclass
 import numpy as np
 import threading as th 
+import queue
+import os
 np.set_printoptions(threshold=np.inf)
 
 
@@ -18,10 +23,12 @@ np.set_printoptions(threshold=np.inf)
 SAMPLING_RATE: int = 2000
 N_CHANNELS: int = 6
 
-ACQUISITION_BLOCK_SIZE: int = 40    # 20 ms a 2000 Hz
+ACQUISITION_BLOCK_SIZE: int = 50    # 20 ms a 2000 Hz
 BUFFER_DURATION_SECONDS: int = 2
 WINDOW_SIZE: int = 400              # 200 ms a 2000 Hz
 HOP_SIZE: int = 200                 # 100 ms a 2000 Hz
+
+USARIO: str                        #Usuario 
 
 #VARIABLES GLOBALES
 
@@ -35,7 +42,7 @@ class config:
     c5: str
     c6: str
 
-conf: config = config(c1= "P", c2= "FC", c3= "FD", c4= "FP", c5= "ED", c6= "EC")
+conf: config = config(c1= "P", c2= "FP", c3= "FD", c4= "FC", c5= "ED", c6= "EC")
 muscle_order= ["FD", "FP", "ED", "EC", "FC", "P"]
 
 
@@ -240,7 +247,201 @@ def offline():
 
         t3.join()  
 
+def name_exists(open_file, name: str) -> bool:
+    open_file.seek(0)
 
+    for line in open_file:
+        if line.strip() == name:
+            return True
+
+    return False
+
+def online():
+    # Clasificador LDA
+    lda: LDAClassifier = LDAClassifier()
+
+    USUARIO = input ("Introduce nombre de usuario")
+    user_dir = os.path.join("models", USUARIO)
+    os.makedirs(user_dir, exist_ok=True)   
+
+    os.makedirs("users", exist_ok=True)
+    users_file= open("users/users.txt", "a+")
+    e: bool= name_exists(users_file, USUARIO)
+
+    if not e: 
+        print("Nuevo usuario")
+        users_file.seek(0, 2)  # ir al final
+        users_file.write(USUARIO + "\n")
+        users_file.flush()
+
+    else: 
+        print ("Usuario existente")
+
+    modo: str = input("Introduce el modo de online ('visualizar' , 'entrenamiento' o 'prediccion'): ")
+
+    memory_path = os.path.join(user_dir, "training_memory.joblib")
+    model_path = os.path.join(user_dir, "lda_model.joblib") 
+
+    if e and modo == "entrenamiento": 
+        print("Usuario existente, se carga memoria")
+        lda.load_training_memory(memory_path)
+        print ("Memoria cargada")
+
+    elif e and modo=="prediccion":
+        print("Usuario existente, se carga modelo lda")
+        lda.load_model(model_path)
+        print("Modelo cargado.")
+
+    
+        
+    #Variables
+    buffer: CircularBuffer = CircularBuffer(40000)
+    buffer2: CircularBuffer = CircularBuffer(40000)
+    channel_names= [conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6]
+    
+
+
+    # Comunicación entre receiver y online
+    block_queue: queue.Queue = queue.Queue(maxsize=200)
+    stop_event = th.Event()
+    buffer_lock = th.Lock()
+
+    # Señales para visualizar
+    raw_signal: list[np.ndarray] = []
+    processed_signal: list[np.ndarray] = []
+
+    #Crear el Visualizador si modo visualizar
+    visualizer = None
+    if modo == "visualizar":
+        visualizer = ControlVisualizer(
+            raw_signal=raw_signal,
+            processed_signal=processed_signal,
+            sampling_rate=SAMPLING_RATE,
+            channel_names=channel_names,
+            file_name="Online",
+            mode="online"
+        )
+
+    # Procesador online
+    processor: SignalProcessor = SignalProcessor(
+        sampling_rate=SAMPLING_RATE,
+        n_channels=N_CHANNELS,
+        apply_bandpass=True,
+        apply_notch=True,
+        bandpass_low=20.0,
+        bandpass_high=450.0,
+        bandpass_order=4,
+        notch_freq=50.0,
+        notch_quality_factor=30.0,
+    )
+
+    # Extractor de características
+    feature_extractor: FeaturesExtractor = FeaturesExtractor(
+        zc_threshold=5.0,
+        ssc_threshold=5.0
+    )
+
+    # Training
+    if modo == "entrenamiento":
+        T: TrainingOnline= TrainingOnline(labels = ["abrir", "cerrar", "reposo", "pinza"],
+                                          min_duration= 3.0,
+                                          max_duration= 10.0,
+                                          transition_ignore= 0.3)
+
+    # Lanzar receiver en segundo plano
+    receiver_thread = th.Thread(
+        target=receive_blocks,
+        args=(buffer, block_queue, stop_event, buffer_lock),
+        daemon=True
+    )
+
+    receiver_thread.start()
+
+    samples_since_last_window: int = 0
+    try:
+        while True:
+            #Espera bloque de la cola
+            block_id, raw_block = block_queue.get(timeout=1.0)
+
+            if raw_block.shape[1] != N_CHANNELS:
+                print(
+                    f"Bloque {block_id} ignorado: tiene {raw_block.shape[1]} canales, "
+                    f"pero se esperaban {N_CHANNELS}"
+                )
+                continue
+
+            # Procesamiento causal bloque a bloque
+            processed_block = processor.process_block(raw_block)
+
+            if (modo == "visualizar"):
+                raw_signal.append(raw_block.copy())
+                processed_signal.append(processed_block.copy())
+
+                # Evitar que las listas crezcan sin límite
+                max_blocks_to_keep = 500 #12.5s
+                if len(raw_signal) > max_blocks_to_keep:
+                    raw_signal.pop(0)
+                    processed_signal.pop(0)
+                if block_id % 10 == 0:
+                    visualizer.update_online()
+                
+            
+            elif modo == "prediccion" or modo== "entrenamiento":
+                # Añadimos a un segundo buffer los bloques procesados
+                for sample in processed_block:
+                    buffer2.add_sample(sample.tolist())
+                
+                samples_since_last_window += processed_block.shape[0]
+
+                if len(buffer2) >= WINDOW_SIZE and samples_since_last_window >= HOP_SIZE:
+                    # Ventana ordenada
+                    signal_data = SignalData(
+                        samples=buffer2.get_last_samples(WINDOW_SIZE),
+                        sampling_rate=SAMPLING_RATE,
+                        channel_names=[conf.c1, conf.c2, conf.c3, conf.c4, conf.c5, conf.c6]
+                    )
+                    window_samples = signal_data.get_samples()
+                    channel_names = signal_data.get_channel_names()
+                    indices = [channel_names.index(m) for m in muscle_order]
+                    window_samples_ordered = window_samples[:, indices]
+                    samples_since_last_window -= HOP_SIZE
+
+                     # Extraer características
+                    features = feature_extractor.extract(SignalData(
+                        samples=window_samples_ordered,
+                        sampling_rate=SAMPLING_RATE,
+                        channel_names=muscle_order
+                    ))
+                    
+                    if modo == "entrenamiento":
+                        label = T.get_training_label()
+
+                        if label != "ignore":
+                            lda.add_training_sample(features, label=label)
+                            print("Muestra añadida:", label)
+                    #Clasificar
+                    elif modo == "prediccion":
+                        predicted_label = lda.predict(features)
+                        print("Predicción:", predicted_label)
+       
+    
+    except KeyboardInterrupt:
+        print("Deteniendo online...")
+
+    finally:
+        stop_event.set()
+        if visualizer is not None:
+            visualizer.close()
+
+        if modo == "entrenamiento":
+            lda.train_from_memory()
+            lda.save_training_memory(memory_path)
+            lda.save_model(model_path)
+            print("Modelo y memoria guardados.")
+
+        users_file.close()
+        print("Online finalizado.")
+        
 #main
 def main():
     """
@@ -250,6 +451,11 @@ def main():
     if modo == "offline":
         print("=== Programa de procesamiento offline de señales EMG ===")
         offline()
+
+    if modo == "online":
+        print("=== Programa de procesamiento online de señales EMG ===")
+        online()
+
 
 
 
